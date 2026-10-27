@@ -1,0 +1,11 @@
+# Generated from your own save and ER Save Manager's data files; never publish.
+data.js
+data/sessions.js
+data/sessions.unreadable-*.js
+assets/
+
+# Local setup and scratch
+tools/.parser-root
+__pycache__/
+*.pyc
+*.bak

@@ -136,6 +136,7 @@
     .dragon-location,.dragon-runes{margin:5px 0;color:var(--muted);font-size:9px;line-height:1.45}.dragon-armor{margin-top:8px;padding:8px;background:#20211c;border:1px solid rgba(255,255,255,.06);border-radius:8px}.dragon-armor strong{display:block;color:var(--gold);font-size:9px;font-weight:500}.dragon-armor span{display:block;margin-top:3px;color:var(--muted);font-size:9px;line-height:1.4}.dragon-combat{display:grid;gap:5px;margin-top:8px;padding:8px;background:#1b1c18;border:1px solid rgba(255,255,255,.07);border-radius:8px}.dragon-combat>strong{color:var(--gold);font-size:9px;font-weight:500}.dragon-combat-row{display:grid;grid-template-columns:94px minmax(0,1fr);gap:8px;font-size:8px;line-height:1.4}.dragon-combat-row>span:first-child{color:var(--muted)}.dragon-combat-row>span:last-child{white-space:pre-line}.dragon-combat-links{display:flex;flex-wrap:wrap;gap:9px;margin-top:3px;font-size:8px}.dragon-combat-links a{color:var(--gold);text-decoration:none;border-bottom:1px dotted var(--gold-dim)}.dragon-combat-links a:hover{border-bottom-style:solid}
     .dragon-drops{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.dragon-drop{width:74px;min-height:74px;padding:5px 4px;text-align:center;background:#20211c;border:1px solid var(--line);border-radius:8px}.dragon-drop img{width:32px;height:32px;object-fit:contain;display:block;margin:0 auto 3px}.dragon-drop strong{display:block;color:var(--text);font-size:8px;line-height:1.25}.dragon-drop small{display:block;margin-top:2px;color:var(--muted);font-size:7px;line-height:1.25}.dragon-drop.is-owned{border-color:#536746}.dragon-armor-set{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.dragon-armor-set .player-gear-card{width:74px}.dragon-armor-note{flex:1 1 190px;color:var(--muted);font-size:9px;line-height:1.5}.magic-list{max-height:210px;overflow:auto;align-content:flex-start;padding:4px}
     footer{border-top:1px solid var(--line);padding:16px 0 25px;color:var(--muted);font-size:10px;display:flex;justify-content:space-between;gap:12px}
+    .footer-action{background:none;border:0;border-bottom:1px dotted currentColor;padding:0;color:var(--muted);font:inherit;cursor:pointer}.footer-action:hover,.footer-action:focus-visible{color:var(--gold);outline:none}
     .status-dot{display:inline-block;width:6px;height:6px;background:var(--green);border-radius:50%;margin-right:7px}
     @media(max-width:760px){
       .shell{width:min(100% - 22px,1320px)}.hero{grid-template-columns:1fr;gap:20px;padding-top:30px}
@@ -255,6 +256,7 @@
             <select class="control" id="status-filter" aria-label="Filter by save status"><option value="all">All catalogue items</option><option value="found">In this save</option><option value="missing" selected>Missing from save</option></select>
             <label class="checkbox-control" for="exclude-dlc"><input id="exclude-dlc" type="checkbox" checked><span>Exclude DLC</span></label>
             <button class="button" id="refresh-button" type="button">Reload snapshot</button>
+            <label class="checkbox-control" for="live-reload" title="Check every 15 seconds for a newer export and load it"><input id="live-reload" type="checkbox" checked><span>Live</span></label>
           </div>
         </div>
         <section class="loadout" id="weapon-loadout" hidden aria-label="Equipped items and compatible equipment">
@@ -343,6 +345,7 @@
     <footer>
       <span><span class="status-dot"></span>Save data stays local; item reference details load on hover.</span>
       <span id="data-status">Waiting for inventory data…</span>
+      <button class="footer-action" id="forget-browser-data" type="button" title="Remove the settings, ticks and baseline this browser stores for Grace Ledger">Clear browser data</button>
     </footer>
   </div>
   <script>
@@ -1478,16 +1481,44 @@
       byId("activity-session").addEventListener("change",function(){selectedSession=Number(byId("activity-session").value)||0;renderActivity();});
       byId("activity-filter").addEventListener("input",debounced(renderActivity,140));byId("storylines-expand").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=true;});});byId("storylines-collapse").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=false;});});byId("travel-flat").addEventListener("change",renderTravelMenu);
       function reloadScript(src,done){var script=document.createElement("script");script.src=src+"?refresh="+Date.now();script.onload=function(){script.remove();done(true);};script.onerror=function(){script.remove();done(false);};document.head.appendChild(script);}
-      byId("refresh-button").addEventListener("click",function(){
+      // A reload rebuilds every view; keep the scroll position and which cards are open.
+      function detailsKey(card){var label=card.dataset.quest||(card.querySelector("summary strong, summary span")||{}).textContent;return label?card.className.split(" ")[0]+"|"+label:"";}
+      function viewState(){var open={};document.querySelectorAll("main details").forEach(function(card){var key=detailsKey(card);if(key)open[key]=card.open;});return {open:open,x:window.scrollX,y:window.scrollY};}
+      function restoreViewState(state){document.querySelectorAll("main details").forEach(function(card){var key=detailsKey(card);if(key&&Object.prototype.hasOwnProperty.call(state.open,key))card.open=state.open[key];});window.scrollTo(state.x,state.y);}
+      function reloadSnapshot(done){
         // Session history first, then the snapshot, so both describe the same export.
         reloadScript("./data/sessions.js",function(){reloadScript("./data.js",function(loaded){
-          if(!loaded){text(byId("data-status"),"Could not reload data.js");return;}
-          var next=window.ER_LEDGER_DATA||{},sameCharacter=profileKey(next)===profileKey(data);
+          if(!loaded){text(byId("data-status"),"Could not reload data.js");if(done)done(false);return;}
+          var next=window.ER_LEDGER_DATA||{},sameCharacter=profileKey(next)===profileKey(data),state=viewState();
           var older=sameCharacter&&data.generation&&data.character&&next.generation!==data.generation?snapshotSummary(data):null;
           data=next;items=Array.isArray(data.catalog)?data.catalog:(Array.isArray(data.items)?data.items:[]);
           if(older)previous=older;else if(!sameCharacter)readBrowserBaseline();
-          safeLoadSessions();render();
+          safeLoadSessions();render();restoreViewState(state);
+          if(done)done(true);
         });});
+      }
+      byId("refresh-button").addEventListener("click",function(){reloadSnapshot();});
+      // Live: data/stamp.js is the exporter's last write, so a new stamp means data.js and sessions.js are complete.
+      var liveChecking=false;
+      try{byId("live-reload").checked=localStorage.getItem("grace-ledger:live")!=="0";}catch(_){}
+      function checkForSnapshot(){
+        if(liveChecking||document.hidden||!byId("live-reload").checked)return;
+        liveChecking=true;
+        reloadScript("./data/stamp.js",function(loaded){
+          var stamp=loaded&&window.ER_LEDGER_STAMP;
+          if(!stamp||(stamp.generatedAt===data.generatedAt&&stamp.generation===data.generation)){liveChecking=false;return;}
+          reloadSnapshot(function(ok){liveChecking=false;if(ok)text(byId("data-status"),byId("data-status").textContent+" · loaded automatically");});
+        });
+      }
+      byId("live-reload").addEventListener("change",function(){try{localStorage.setItem("grace-ledger:live",byId("live-reload").checked?"1":"0");}catch(_){}checkForSnapshot();});
+      document.addEventListener("visibilitychange",checkForSnapshot);
+      setInterval(checkForSnapshot,15000);
+      // Uninstall helper: every key this page stores starts with "grace-ledger".
+      byId("forget-browser-data").addEventListener("click",function(){
+        var removed=0;
+        try{for(var index=localStorage.length-1;index>=0;index--){var key=localStorage.key(index);if(key&&key.indexOf("grace-ledger")===0){localStorage.removeItem(key);removed++;}}}catch(_){text(byId("data-status"),"This browser blocked access to its storage; nothing to clear.");return;}
+        byId("live-reload").checked=false;
+        text(byId("data-status"),"Cleared "+plural(removed,"stored setting")+". Close this tab now; using the page again stores its settings again.");
       });
       render(true);
       if(window.location.hash.length>1)showView(window.location.hash.slice(1));

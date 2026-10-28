@@ -2,10 +2,15 @@
 data.js
 data/sessions.js
 data/sessions.unreadable-*.js
+data/stamp.js
 assets/
 
 # Local setup and scratch
 tools/.parser-root
+tools/watch.log*
+tools/.watch.lock
+tools/.watch.stop
+*.tmp
 __pycache__/
 *.pyc
 *.bak

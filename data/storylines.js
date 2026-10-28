@@ -7,24 +7,24 @@ window.ER_STORYLINES = {
     title: "Main story · the Elden Throne",
     intro: "Two Great Runes open Leyndell. After the Fire Giant, the road runs through Farum Azula to the Ashen Capital and the final choice of ending.",
     stages: [
-      {title: "Limgrave · Stormveil Castle", nodes: [
+      {title: "Limgrave · Stormveil Castle", places: ["Limgrave", "Stormveil Castle"], nodes: [
         {label: "Margit, the Fell Omen", boss: "Margit, the Fell Omen"},
         {label: "Godrick the Grafted", boss: "Godrick the Grafted", rewards: ["Godrick's Great Rune", "Remembrance of the Grafted"]}]},
       {title: "Shardbearers · any two Great Runes open Leyndell", parallel: true, nodes: [
         {label: "Rennala, Queen of the Full Moon", boss: "Rennala, Queen of the Full Moon", note: "Liurnia · unlocks Rebirth", rewards: ["Great Rune of the Unborn", "Remembrance of the Full Moon Queen"]},
         {label: "Starscourge Radahn", boss: "Starscourge Radahn", note: "Caelid · the falling star opens Nokron", rewards: ["Radahn's Great Rune", "Remembrance of the Starscourge"]},
         {label: "Rykard, Lord of Blasphemy", boss: "Rykard, Lord of Blasphemy", note: "Volcano Manor", rewards: ["Rykard's Great Rune", "Remembrance of the Blasphemous"]}]},
-      {title: "Leyndell, Royal Capital", nodes: [
+      {title: "Leyndell, Royal Capital", places: ["Leyndell, Royal Capital"], nodes: [
         {label: "Godfrey, First Elden Lord (golden shade)", boss: "Godfrey, First Elden Lord"},
         {label: "Morgott, the Omen King", boss: "Morgott, the Omen King", rewards: ["Morgott's Great Rune", "Remembrance of the Omen King"]}]},
-      {title: "Forbidden Lands · Mountaintops of the Giants", nodes: [
+      {title: "Forbidden Lands · Mountaintops of the Giants", places: ["Forbidden Lands", "Mountaintops of the Giants"], nodes: [
         {label: "Melina hands over the Rold Medallion at the Erdtree thorns", item: "Rold Medallion", quest: "Melina", patterns: ["giving you the \"rold medallion\""], rewards: ["Rold Medallion"]},
         {label: "Fire Giant", boss: "Fire Giant", rewards: ["Remembrance of the Fire Giant"]},
         {label: "Forge of the Giants: Melina burns the Erdtree", note: "If you accepted the Flame of Frenzy, Melina has left and you light the forge yourself."}]},
-      {title: "Crumbling Farum Azula", nodes: [
+      {title: "Crumbling Farum Azula", places: ["Crumbling Farum Azula"], nodes: [
         {label: "Godskin Duo", boss: "Godskin Duo", rewards: ["Smithing-Stone Miner's Bell Bearing [4]"]},
         {label: "Maliketh, the Black Blade", boss: "Maliketh, the Black Blade", rewards: ["Remembrance of the Black Blade"], note: "Leyndell becomes the Ashen Capital."}]},
-      {title: "Leyndell, Ashen Capital · Elden Throne", nodes: [
+      {title: "Leyndell, Ashen Capital · Elden Throne", places: ["Leyndell, Ashen Capital", "Elden Throne"], nodes: [
         {label: "Sir Gideon Ofnir, the All-Knowing", boss: "Sir Gideon Ofnir, the All-Knowing"},
         {label: "Hoarah Loux, Warrior", boss: "Hoarah Loux, Warrior"},
         {label: "Radagon of the Golden Order → Elden Beast", boss: "Elden Beast", rewards: ["Elden Remembrance"], note: "One continuous fight; no Site of Grace between the two phases."}]}
@@ -130,5 +130,30 @@ window.ER_STORYLINES = {
         {label: "Decline", outcome: "Reach Mohgwyn through the Consecrated Snowfield waygate instead.", patterns: [], rewards: []}
       ]
     }]
-  }
+  },
+  // Gated areas for quest locations. `match` holds lower-case fragments of quest-step locations; `open` lists
+  // alternatives (any one opens the area): boss defeated, all items held, a grace found in a region or by name,
+  // or a number of Shardbearer Great Runes. Places matching no entry are always reachable.
+  areas: [
+    {name: "Leyndell, Ashen Capital", match: ["ashen capital"], regions: ["Leyndell, Ashen Capital"], open: [{boss: "Maliketh, the Black Blade"}], need: "Opens after Maliketh, the Black Blade."},
+    {name: "Crumbling Farum Azula", match: ["farum azula"], regions: ["Crumbling Farum Azula"], open: [{boss: "Fire Giant"}, {grace: "Crumbling Farum Azula"}], need: "Opens at the Forge of the Giants after the Fire Giant."},
+    {name: "Miquella's Haligtree", match: ["haligtree", "elphael"], regions: ["Miquella's Haligtree", "Elphael, Brace of the Haligtree"], open: [{items: ["Haligtree Secret Medallion (Left)", "Haligtree Secret Medallion (Right)"]}, {grace: "Miquella's Haligtree"}, {grace: "Elphael, Brace of the Haligtree"}], need: "Needs both Haligtree Secret Medallion halves at the Grand Lift of Rold."},
+    {name: "Consecrated Snowfield", match: ["consecrated snowfield", "ordina", "yelough", "apostate derelict"], regions: ["Consecrated Snowfield"], open: [{items: ["Haligtree Secret Medallion (Left)", "Haligtree Secret Medallion (Right)"]}, {grace: "Consecrated Snowfield"}], need: "Needs both Haligtree Secret Medallion halves at the Grand Lift of Rold."},
+    {name: "Mohgwyn Palace", match: ["mohgwyn"], regions: ["Mohgwyn Palace"], open: [{items: ["Pureblood Knight's Medal"]}, {items: ["Haligtree Secret Medallion (Left)", "Haligtree Secret Medallion (Right)"]}, {grace: "Mohgwyn Palace"}], need: "Needs White Mask Varré's Pureblood Knight's Medal, or the Consecrated Snowfield waygate."},
+    {name: "Forge of the Giants", match: ["forge of the giants"], regions: [], open: [{boss: "Fire Giant"}, {graceName: "Forge of the Giants"}], need: "Reached after the Fire Giant at Flame Peak."},
+    {name: "Mountaintops of the Giants", match: ["mountaintop", "first church of marika", "stargazers' ruins", "church of repose", "ancient snow valley", "flame peak", "grand lift of rold", "castle sol", "zamor"], regions: ["Mountaintops of the Giants", "Flame Peak"], open: [{items: ["Rold Medallion"]}, {grace: "Mountaintops of the Giants"}], need: "Needs the Rold Medallion, which Melina gives after Morgott."},
+    {name: "Leyndell, Royal Capital", match: ["leyndell", "capital rampart", "subterranean shunning", "underground roadside", "cathedral of the forsaken", "royal colosseum", "erdtree sanctuary", "fortified manor"], regions: ["Leyndell, Royal Capital", "Subterranean Shunning-Grounds"], open: [{greatRunes: 2}, {grace: "Leyndell, Royal Capital"}], need: "Needs two Great Runes to pass the gate into Leyndell."},
+    {name: "Capital Outskirts", match: ["capital outskirts", "captial outskirts", "outer wall", "minor erdtree church in capital"], regions: ["Capital Outskirts"], open: [{grace: "Altus Plateau"}, {grace: "Capital Outskirts"}], need: "Reached through the Altus Plateau."},
+    {name: "Moonlight Altar", match: ["moonlight altar", "cathedral of manus celes"], regions: ["Moonlight Altar"], open: [{boss: "Astel, Naturalborn of the Void"}, {grace: "Moonlight Altar"}], need: "Opens through Ranni's quest after Astel, Naturalborn of the Void."},
+    {name: "Divine Tower of Liurnia", match: ["divine tower of liurnia"], regions: [], open: [{items: ["Carian Inverted Statue"]}, {graceName: "Divine Tower of Liurnia"}], need: "Needs the Carian Inverted Statue from Ranni's quest to invert the Carian Study Hall."},
+    {name: "Nokron, Eternal City", match: ["nokron", "night's sacred ground", "siofra aqueduct"], regions: ["Nokron, Eternal City"], open: [{boss: "Starscourge Radahn"}, {grace: "Nokron, Eternal City"}], need: "Opens where the star falls after Starscourge Radahn."},
+    {name: "Deeproot Depths", match: ["deeproot", "prince of death's throne"], regions: ["Deeproot Depths"], open: [{boss: "Starscourge Radahn"}, {greatRunes: 2}, {grace: "Deeproot Depths"}], need: "Reached from Nokron after Radahn, or through Leyndell's sewers."},
+    {name: "Three Sisters", match: ["ranni's rise", "seluvis's rise", "ranni's/seluvis's rise", "renna's rise"], regions: [], open: [{boss: "Royal Knight Loretta"}, {graceName: "Ranni's Rise"}], need: "Reached through Caria Manor after Royal Knight Loretta."},
+    {name: "Academy of Raya Lucaria", match: ["raya lucaria grand library", "schoolhouse classroom", "academy"], regions: ["Academy of Raya Lucaria"], open: [{items: ["Academy Glintstone Key"]}, {grace: "Academy of Raya Lucaria"}], need: "Needs the Academy Glintstone Key."},
+    {name: "Altus Plateau", match: ["altus", "dominula", "shaded castle", "erdtree-gazing", "hermit village", "fort laiedd", "forest-spanning greatbridge", "mt. gelmir", "primeval sorcerer azur"], regions: ["Altus Plateau", "Mt. Gelmir"], open: [{items: ["Dectus Medallion (Left)", "Dectus Medallion (Right)"]}, {boss: "Magma Wyrm Makar"}, {grace: "Altus Plateau"}, {grace: "Ruin-Strewn Precipice"}], need: "Needs both Dectus Medallion halves, or the Ruin-Strewn Precipice past Magma Wyrm Makar."},
+    {name: "Lake of Rot and Ainsel River", match: ["lake of rot", "nokstella", "ainsel"], regions: ["Lake of Rot", "Ainsel River", "Ainsel River Main"], open: []},
+    {name: "Volcano Manor", match: ["volcano manor"], regions: ["Volcano Manor"], open: []}
+  ],
+  // Region names as quest steps write them, for the "not discovered" check outside the gated areas.
+  regionAliases: {"limgrave": "Limgrave", "stormhill": "Stormhill", "weeping peninsula": "Weeping Peninsula", "liurnia": "Liurnia of the Lakes", "caelid": "Caelid", "dragonbarrow": "Greyoll's Dragonbarrow", "bellum": "Bellum Highway", "roundtable": "Roundtable Hold", "rth": "Roundtable Hold", "stormveil": "Stormveil Castle", "siofra": "Siofra River", "aeonia": "Swamp of Aeonia"}
 };

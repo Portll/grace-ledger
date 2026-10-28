@@ -7,16 +7,19 @@ import argparse
 import csv
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
 import unicodedata
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +39,15 @@ DUNGEON_WORDS = ("cave", "catacomb", "tunnel", "hero's grave", "hero’s grave",
 HISTORY_FORMAT = 1
 ATTRIBUTE_KEYS = ("vigor", "mind", "endurance", "strength", "dexterity", "intelligence", "faith", "arcane")
 HISTORY_WORLD_KEYS = ("graces", "locations", "enemies", "maps")
+# --watch: export when the save changes, at most once a minute; one play session per game launch.
+WATCH_POLL_SECONDS = 5          # while the game runs or a save change is waiting
+WATCH_IDLE_SECONDS = 20         # otherwise
+WATCH_SETTLE_SECONDS = 15       # export once the save has been still this long...
+WATCH_MAX_WAIT_SECONDS = 120    # ...or has kept changing this long
+WATCH_MIN_GAP_SECONDS = 60
+WATCH_RUN_GRACE_SECONDS = 300   # a save written this soon after the game closes still belongs to that launch
+AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_VALUE = "Grace Ledger watcher"
 NPC_GRACE_HINTS = {
     "albus": "Village of the Albinaurics", "alexander": "Saintsbridge", "blaidd": "Mistwood Outskirts",
     "blackguard big boggart": "Boilprawn Shack", "boc the seamster": "Coastal Cave", "brother corhyn": "Roundtable Hold",
@@ -144,6 +156,293 @@ def latest_save(explicit: str | None) -> Path:
     if not saves:
         raise FileNotFoundError("No Steam save found under %APPDATA%/EldenRing. Pass --save.")
     return max(saves, key=lambda path: path.stat().st_mtime_ns)
+
+
+def save_signature(path: Path) -> str:
+    """The same "<size>-<mtime_ns>" generation stable_snapshot records for a copy."""
+    stat = path.stat()
+    return f"{stat.st_size}-{stat.st_mtime_ns}"
+
+
+def game_run(image: str = "eldenring.exe") -> str | None:
+    """Identify the running game launch as "<pid>@<start time>"; None when Elden Ring is not running or not on Windows."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.Process32FirstW.argtypes = kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return None
+    pid, entry = None, ProcessEntry()
+    entry.dwSize = ctypes.sizeof(entry)
+    try:
+        more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.szExeFile.lower() == image:
+                pid = entry.th32ProcessID
+                break
+            more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    if pid is None:
+        return None
+    started = ""
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION; the anti-cheat may refuse it
+    if handle:
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if kernel32.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+                ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                moment = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ticks // 10)
+                started = moment.astimezone().isoformat(timespec="seconds")
+        finally:
+            kernel32.CloseHandle(handle)
+    return f"{pid}@{started}" if started else str(pid)
+
+
+def watch_arguments(args) -> list[str]:
+    """The export options a watcher passes on to each export, as absolute paths."""
+    passed = []
+    if args.save:
+        passed += ["--save", str(Path(args.save).expanduser().resolve())]
+    if args.slot is not None:
+        passed += ["--slot", str(args.slot)]
+    if args.parser_root:
+        passed += ["--parser-root", str(args.parser_root.expanduser().resolve())]
+    if args.icons_db:
+        passed += ["--icons-db", str(args.icons_db.expanduser().resolve())]
+    return passed
+
+
+def acquire_watch_lock(path: Path):
+    """Hold an exclusive lock on `path` while this process lives; None when another watcher holds it."""
+    handle = path.open("a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def run_export(arguments: list[str], log: logging.Logger) -> bool:
+    """Export in a child process at below-normal priority, so a failed export never stops the watcher."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+    try:
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), *arguments], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                                timeout=300, creationflags=flags)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log.info("Export failed: %s", error)
+        return False
+    lines = (result.stdout + result.stderr).strip().splitlines()
+    if result.returncode:
+        log.info("Export failed (exit %d): %s", result.returncode, " | ".join(lines[-3:]))
+        return False
+    log.info("Exported. %s", " | ".join(line for line in lines if line.startswith(("Character:", "History:"))))
+    return True
+
+
+def watch(here: Path, passthrough: list[str], save_arg: str | None) -> int:
+    """Export whenever the save changes. Exports during one game launch update the same play session."""
+    tools = here / "tools"
+    log = logging.getLogger("grace-ledger.watch")
+    log.setLevel(logging.INFO)
+    handler = RotatingFileHandler(tools / "watch.log", maxBytes=256 * 1024, backupCount=1, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+    log.addHandler(handler)
+    if sys.stderr:
+        log.addHandler(logging.StreamHandler())
+    lock = acquire_watch_lock(tools / ".watch.lock")
+    if lock is None:
+        log.info("Another watcher is already running; this one is exiting.")
+        return 0
+    stop = tools / ".watch.stop"
+    stop.unlink(missing_ok=True)
+    exported = (read_js_payload(here / "data.js", "ER_LEDGER_DATA") or {}).get("generation")
+    seen, changed_at, pending_since, next_export, failures = exported, 0.0, None, 0.0, 0
+    run, run_seen_at = None, 0.0
+    log.info("Watching %s for save changes. Stop with Ctrl+C or --remove-watcher.", save_arg or r"%APPDATA%\EldenRing")
+    try:
+        while not stop.exists():
+            now = time.monotonic()
+            live = game_run()
+            if live and live != run:
+                log.info("Elden Ring is running (launch %s).", live)
+            if live:
+                run, run_seen_at = live, now
+            elif run and pending_since is None and now - run_seen_at > WATCH_RUN_GRACE_SECONDS:
+                log.info("Elden Ring closed; the play session for launch %s is complete.", run)
+                run = None
+            try:
+                signature = save_signature(latest_save(save_arg))
+            except (OSError, RuntimeError):
+                signature = None
+            if signature and signature != exported:
+                if signature != seen:
+                    seen, changed_at, pending_since = signature, now, pending_since or now
+                ready = now - changed_at >= WATCH_SETTLE_SECONDS or now - pending_since >= WATCH_MAX_WAIT_SECONDS
+                if ready and now >= next_export:
+                    ok = run_export(passthrough + ["--run", run or "none"], log)
+                    failures = 0 if ok else failures + 1
+                    next_export = time.monotonic() + (WATCH_MIN_GAP_SECONDS if ok else min(600, WATCH_MIN_GAP_SECONDS * 2 ** failures))
+                    if ok:
+                        exported, pending_since = signature, None
+            # Sleep in one-second steps so a stop request takes effect at once.
+            for _ in range(WATCH_POLL_SECONDS if live or pending_since else WATCH_IDLE_SECONDS):
+                if stop.exists():
+                    break
+                time.sleep(1)
+        stop.unlink(missing_ok=True)
+        log.info("Stop requested; watcher exiting.")
+    except KeyboardInterrupt:
+        log.info("Watcher stopped.")
+    finally:
+        lock.close()
+        try:
+            (tools / ".watch.lock").unlink(missing_ok=True)
+        except OSError:
+            pass  # --remove-watcher has it open to confirm the exit, and deletes it itself
+        for log_handler in list(log.handlers):
+            log_handler.close()
+            log.removeHandler(log_handler)
+    return 0
+
+
+def watcher_command(passthrough: list[str]) -> list[str]:
+    windowless = Path(sys.executable).with_name("pythonw.exe")
+    interpreter = windowless if windowless.is_file() else Path(sys.executable)
+    return [str(interpreter), str(Path(__file__).resolve()), "--watch", *passthrough]
+
+
+def install_watcher(passthrough: list[str]) -> int:
+    """Start the watcher at every Windows sign-in (HKCU Run, no admin rights) and start it now."""
+    if os.name != "nt":
+        raise RuntimeError("--install-watcher is for Windows. Run --watch from your own startup script instead.")
+    import winreg
+    command = watcher_command(passthrough)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+        winreg.SetValueEx(key, AUTOSTART_VALUE, 0, winreg.REG_SZ, subprocess.list2cmdline(command))
+    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                     creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+    print(f"The watcher now starts when you sign in to Windows (Task Manager > Startup apps lists it as \"{AUTOSTART_VALUE}\") and is running now.")
+    print(f"It logs to {Path(__file__).with_name('watch.log')}. Remove it with --remove-watcher.")
+    return 0
+
+
+def remove_autostart() -> bool:
+    """Delete the sign-in entry; True if there was one."""
+    if os.name != "nt":
+        return False
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+        try:
+            winreg.DeleteValue(key, AUTOSTART_VALUE)
+            return True
+        except FileNotFoundError:
+            return False
+
+
+def stop_watcher(tools: Path, wait_seconds: float = 15) -> str:
+    """Ask a running watcher to exit and wait for its lock. Returns "none", "stopped" or "running"."""
+    lock_path, stop = tools / ".watch.lock", tools / ".watch.stop"
+    if not lock_path.exists():
+        stop.unlink(missing_ok=True)
+        return "none"
+    stop.touch()
+    deadline, waited = time.monotonic() + wait_seconds, False
+    while True:
+        handle = acquire_watch_lock(lock_path)
+        if handle:
+            handle.close()
+            lock_path.unlink(missing_ok=True)
+            stop.unlink(missing_ok=True)
+            return "stopped" if waited else "none"
+        if time.monotonic() > deadline:
+            return "running"
+        waited = True
+        time.sleep(0.25)
+
+
+def remove_watcher(here: Path) -> int:
+    """Remove the sign-in entry and stop a running watcher."""
+    removed, state = remove_autostart(), stop_watcher(here / "tools")
+    print("Removed the sign-in entry." if removed else "There was no sign-in entry.")
+    print({"none": "No watcher was running.", "stopped": "Stopped the running watcher.",
+           "running": "The watcher has not exited yet; end pythonw.exe in Task Manager if it is still running."}[state])
+    return 0 if state != "running" else 1
+
+
+def generated_files(here: Path) -> list[Path]:
+    """Every file the exporter and watcher create in this folder, plus the local ER Save Manager setting."""
+    data, tools = here / "data", here / "tools"
+    candidates = [here / "data.js", here / "data.js.tmp", data / "sessions.js", data / "sessions.js.tmp",
+                  data / "stamp.js", data / "stamp.js.tmp", tools / "watch.log", tools / "watch.log.1",
+                  tools / ".watch.lock", tools / ".watch.stop", tools / ".parser-root"]
+    candidates += sorted(data.glob("sessions.unreadable-*.js")) + sorted((here / "assets" / "items").glob("item_*.webp"))
+    candidates += sorted((tools / "__pycache__").glob("refresh_inventory.*.pyc"))
+    return [path for path in candidates if path.is_file()]
+
+
+def uninstall(here: Path, assume_yes: bool) -> int:
+    """Remove the sign-in entry, stop the watcher and delete everything Grace Ledger generated in this folder."""
+    targets = generated_files(here)
+    history = read_js_payload(here / "data" / "sessions.js", "ER_LEDGER_SESSIONS") or {}
+    sessions = sum(len(profile.get("sessions") or []) for profile in (history.get("profiles") or {}).values())
+    icons = [path for path in targets if path.suffix == ".webp"]
+    parser_root = DEFAULT_PARSER_ROOT
+    print(f"Uninstalling Grace Ledger from {here}:")
+    print("  - remove the Windows sign-in entry and stop the watcher, if present")
+    for path in targets:
+        if path.suffix != ".webp":
+            print(f"  - delete {path.relative_to(here)}")
+    if icons:
+        print(f"  - delete assets{os.sep}items{os.sep} ({len(icons)} item icons)")
+    if sessions:
+        print(f"Your session history ({sessions} sessions) cannot be recovered afterwards.")
+    if not assume_yes:
+        if not (sys.stdin and sys.stdin.isatty()):
+            raise RuntimeError("--uninstall asks before deleting anything; add --yes to run it without a prompt.")
+        if input("Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Nothing was changed.")
+            return 1
+    remove_autostart()
+    if stop_watcher(here / "tools") == "running":
+        raise RuntimeError("The watcher did not stop. End pythonw.exe in Task Manager, then run --uninstall again.")
+    for path in generated_files(here):
+        path.unlink(missing_ok=True)
+    for folder in (here / "assets" / "items", here / "assets", here / "tools" / "__pycache__"):
+        try:
+            folder.rmdir()  # only removes empty folders
+        except OSError:
+            pass
+    print(f"Done. Grace Ledger leaves nothing else on this PC; delete {here} to remove the page and exporter as well.")
+    print("Never touched: your Elden Ring save, and ER Save Manager" + (f" in {parser_root}" if parser_root else "") + ", which is your own download.")
+    if os.environ.get("ER_SAVE_MANAGER_ROOT"):
+        print("You set the ER_SAVE_MANAGER_ROOT environment variable yourself; remove it in Windows settings if you no longer need it.")
+    print("Your browser keeps this page's own settings. Open index.html and select \"Clear browser data\" at the bottom before deleting the folder.")
+    return 0
 
 
 def icon_database(path: Path):
@@ -366,10 +665,11 @@ def change_count(changes: dict) -> int:
     return sum(1 if key in ("level", "runes") else len(value) for key, value in changes.items())
 
 
-def record_session(history: dict, export: dict, previous_export: dict | None = None) -> str:
+def record_session(history: dict, export: dict, previous_export: dict | None = None, run: str | None = None) -> str:
     """Append a play session when the save generation changed since this character's last export.
 
-    Returns "session", "baseline" (first export for this character) or "unchanged" (nothing recorded).
+    Returns "session", "updated" (folded into the open session for the same game launch `run`),
+    "baseline" (first export for this character) or "unchanged" (nothing recorded).
     `previous_export` is the data.js being replaced; it seeds a character's first comparison.
     """
     key = profile_key(export)
@@ -384,14 +684,23 @@ def record_session(history: dict, export: dict, previous_export: dict | None = N
         if previous_export and profile_key(previous_export) == key:
             previous = snapshot_summary(previous_export)
     outcome = "baseline"
-    if previous and previous.get("generation") != current["generation"]:
-        sessions = profile.setdefault("sessions", [])
+    sessions = profile.setdefault("sessions", [])
+    if run and sessions and sessions[0].get("run") == run and profile.get("runStart"):
+        # Same game launch: diff from the state before the launch rather than adding a session per save write.
+        sessions[0]["to"] = {"generatedAt": current["generatedAt"], "generation": current["generation"]}
+        sessions[0]["changes"] = summary_changes(profile["runStart"], current, export.get("catalog") or [])
+        outcome = "updated"
+    elif previous and previous.get("generation") != current["generation"]:
         sessions.insert(0, {
             "session": sessions[0]["session"] + 1 if sessions else 1,
             "from": {"generatedAt": previous.get("generatedAt"), "generation": previous.get("generation")},
             "to": {"generatedAt": current["generatedAt"], "generation": current["generation"]},
             "changes": summary_changes(previous, current, export.get("catalog") or []),
         })
+        if run:
+            sessions[0]["run"], profile["runStart"] = run, previous
+        else:
+            profile.pop("runStart", None)
         outcome = "session"
     profile["last"] = current
     history["updatedAt"] = current["generatedAt"]
@@ -403,19 +712,36 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--save", help="Steam save path (default: newest ER0000.sl2 in AppData).")
     parser.add_argument("--slot", type=int, help="Character slot index (default: highest-level active slot).")
-    parser.add_argument("--parser-root", type=Path, default=DEFAULT_PARSER_ROOT, help="ER Save Manager source/install folder.")
+    parser.add_argument("--parser-root", type=Path, help="ER Save Manager source/install folder (default: ER_SAVE_MANAGER_ROOT or tools/.parser-root).")
     parser.add_argument("--icons-db", type=Path, help="Path to the local item icons database.")
+    parser.add_argument("--watch", action="store_true", help="Keep running and export whenever the save changes.")
+    parser.add_argument("--install-watcher", action="store_true", help="Windows: run --watch at every sign-in, and start it now.")
+    parser.add_argument("--remove-watcher", action="store_true", help="Windows: undo --install-watcher and stop a running watcher.")
+    parser.add_argument("--uninstall", action="store_true", help="Remove the watcher and delete every file Grace Ledger generated here, after a prompt.")
+    parser.add_argument("--yes", action="store_true", help="With --uninstall: skip the prompt.")
+    parser.add_argument("--run", help="Game launch this export belongs to; exports from one launch share a play session. "
+                                      "Default: the running game, if any. The watcher passes it; 'none' records a separate session.")
     args = parser.parse_args()
 
+    if args.uninstall:
+        return uninstall(here, args.yes)
+    if args.remove_watcher:
+        return remove_watcher(here)
     save_path = latest_save(args.save)
-    if args.parser_root is None:
+    configured_root = args.parser_root or DEFAULT_PARSER_ROOT
+    if configured_root is None:
         raise SystemExit("ER Save Manager not configured. Pass --parser-root, set ER_SAVE_MANAGER_ROOT, or put its folder path in tools/.parser-root.")
-    parser_root = args.parser_root.expanduser().resolve()
+    parser_root = configured_root.expanduser().resolve()
     icons_path = (args.icons_db.expanduser().resolve() if args.icons_db else parser_root / "src" / "er_save_manager" / "data" / "icons.db")
     if not (parser_root / "src" / "er_save_manager").is_dir():
         raise FileNotFoundError(f"Parser package not found under {parser_root}. Pass --parser-root.")
     if not icons_path.is_file():
         raise FileNotFoundError(f"Item icon database not found: {icons_path}. Pass --icons-db.")
+    if args.install_watcher:
+        return install_watcher(watch_arguments(args))
+    if args.watch:
+        return watch(here, watch_arguments(args), args.save)
+    run = game_run() if args.run is None else (None if args.run.lower() == "none" else args.run)
 
     sys.path.insert(0, str(parser_root / "src"))
     from er_save_manager.data.event_flags_db import get_category_flags, get_flag_info
@@ -578,7 +904,9 @@ def main() -> int:
             if old_asset.name not in expected:
                 old_asset.unlink()
         for asset_name, blob in used_icons.items():
-            (assets / asset_name).write_bytes(blob)
+            target = assets / asset_name
+            if not target.is_file() or target.stat().st_size != len(blob):
+                target.write_bytes(blob)
 
         grace_catalog = []
         for grace in get_graces(include_convergence=is_convergence):
@@ -807,10 +1135,12 @@ def main() -> int:
             history = {"format": HISTORY_FORMAT, "profiles": {}}
         # Read the export being replaced before overwriting it: it seeds a character's first session.
         previous_export = None if profile_key(data) in history["profiles"] else read_js_payload(output, "ER_LEDGER_DATA")
-        history_outcome = record_session(history, data, previous_export)
-        output.write_text("window.ER_LEDGER_DATA = " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
+        history_outcome = record_session(history, data, previous_export, run)
+        write_js_payload(output, "ER_LEDGER_DATA", data)
         if history_outcome != "unchanged":
             write_js_payload(history_path, "ER_LEDGER_SESSIONS", history)
+        # Written last: the page's Live setting polls this small file and reloads once it changes.
+        write_js_payload(here / "data" / "stamp.js", "ER_LEDGER_STAMP", {"generatedAt": data["generatedAt"], "generation": generation})
 
     found_catalog = sum(1 for item in data["catalog"] if item["found"])
     print(f"Exported {found_catalog}/{len(data['catalog'])} catalog items found, {len(used_icons)} item icons, "
@@ -818,9 +1148,11 @@ def main() -> int:
     print(f"Character: {character['name']} · level {character['level']} · save: {save_path}")
     print(f"Wrote {output}")
     profile = history["profiles"][profile_key(data)]
-    if history_outcome == "session":
+    if history_outcome in ("session", "updated"):
         latest = profile["sessions"][0]
-        print(f"History: recorded session {latest['session']} ({change_count(latest['changes'])} changes) in {history_path}")
+        verb = "updated" if history_outcome == "updated" else "recorded"
+        live = " for the running game" if latest.get("run") else ""
+        print(f"History: {verb} session {latest['session']}{live} ({change_count(latest['changes'])} changes) in {history_path}")
     elif history_outcome == "baseline":
         print(f"History: baseline recorded in {history_path}; the next export after playing records a session.")
     else:
@@ -832,4 +1164,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (FileNotFoundError, RuntimeError, ValueError) as error:
+        if "--watch" in sys.argv:
+            # A watcher started at sign-in has no console; leave the reason where --install-watcher said to look.
+            with Path(__file__).with_name("watch.log").open("a", encoding="utf-8") as log_file:
+                log_file.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} Watcher could not start: {error}\n")
         raise SystemExit(f"Error: {error}")

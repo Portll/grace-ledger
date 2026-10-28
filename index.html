@@ -164,6 +164,15 @@
     .activity-summary{margin:0 0 12px;padding:10px 12px;border:1px solid var(--gold-dim);border-radius:10px;background:var(--panel);font-size:12px;color:var(--muted)}.activity-summary strong{color:var(--text);font-weight:500}
     .stock-item strong{font-weight:500}.stock-item small{display:block;color:var(--muted);font-size:10px;margin-top:2px}.data-table input.control{width:72px;padding:5px 7px}
     .travel-table{margin-top:10px}
+    .place-badge{display:inline-block;margin:0 0 0 6px;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px;white-space:nowrap}
+    .place-badge.is-unavailable{border:1px solid #9ea3a8;color:#d5d9dd;background:rgba(213,217,221,.1)}.place-badge.is-undiscovered{border:1px dashed var(--gold-dim);color:var(--gold)}
+    .story-card>summary .place-badge{justify-self:start;margin:0}.story-gate{margin:0 0 8px;color:var(--muted);font-size:11px}.story-gate .place-badge{margin:0 4px 0 0}
+    .story-card.is-unavailable[open]{border-color:#6d7176}.story-card.is-unavailable{background:linear-gradient(145deg,rgba(213,217,221,.09),rgba(213,217,221,.02) 60%),var(--panel);border-color:#6d7176}
+    .story-card.is-unavailable>summary strong,.story-card.is-unavailable .story-meta,.story-card.is-unavailable .story-body>*:not(.story-gate){opacity:.5}.story-card.is-unavailable .story-progress span{background:#9ea3a8}
+    .data-table tr.is-unavailable td{color:var(--muted)}.data-table tr.is-unavailable td>*:not(:has(.place-badge)){opacity:.6}.data-table tr.is-unavailable{background:rgba(213,217,221,.04)}
+    .item-card{content-visibility:auto;contain-intrinsic-size:auto 270px}.tier-card{content-visibility:auto;contain-intrinsic-size:auto 130px}.dragon-card{content-visibility:auto;contain-intrinsic-size:auto 430px}.story-card,.npc-grid>*{content-visibility:auto;contain-intrinsic-size:auto 90px}
+    .lookup-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--gold-dim)}.lookup-link:hover{color:var(--gold);border-bottom-color:var(--gold)}.lookup-link:focus-visible{outline:1px solid var(--gold);outline-offset:2px}
+    .place-note{display:block;color:var(--muted);font-size:10px;margin-top:2px}.story-where{margin:0 0 6px;color:var(--muted);font-size:11px;line-height:1.5}
     .link-button{all:unset;cursor:pointer;color:var(--gold);border-bottom:1px dotted var(--gold-dim)}.link-button:hover{color:var(--text)}.link-button:focus-visible{outline:1px solid var(--gold);outline-offset:2px}
     .story-main{margin:0 0 16px;padding:14px 16px;background:var(--panel);border:1px solid var(--gold-dim);border-radius:12px}
     .story-main>h3{margin:0 0 4px;font:500 18px Georgia,serif;color:var(--gold)}.story-main>p{margin:0;color:var(--muted);font-size:11px}
@@ -831,10 +840,10 @@
         }
         paint();return wrap;
       }
-      function cellWithIcon(icon,label,glyph){
+      function cellWithIcon(icon,label,glyph,linked){
         var wrap=document.createElement("span");wrap.className="cell-item";var mark=document.createElement("span");mark.className="cell-icon";
         if(icon){var image=document.createElement("img");image.src=icon;image.alt="";image.loading="lazy";image.onerror=function(){image.remove();text(mark,glyph||"·");};mark.appendChild(image);}else text(mark,glyph||"·");
-        var name=document.createElement("span");name.textContent=label;wrap.appendChild(mark);wrap.appendChild(name);return wrap;
+        var name=linked?lookupLink(label):document.createElement("span");if(!linked)name.textContent=label;wrap.appendChild(mark);wrap.appendChild(name);return wrap;
       }
       function activityTables(changes) {
         var world=data.world||{},graces=Object.create(null),bosses=Object.create(null),dungeons=new Set(changes.locations||[]),byKey=Object.create(null);
@@ -856,7 +865,7 @@
         function countColumn(key,label){return {key:key,label:label,numeric:true,render:function(row){return Number(row[key]).toLocaleString();}};}
         var changeColumn={key:"change",label:"Change",numeric:true,render:function(row){var span=document.createElement("span");span.className="delta"+(row.change>0?" is-up":row.change<0?" is-down":"");span.textContent=signed(row.change);return span;}};
         return [
-          {id:"progress",title:"Progress",rows:progress,columns:[{key:"name",label:"Name",render:function(row){return cellWithIcon(null,row.name,row.glyph);}},{key:"type",label:"Type"},{key:"region",label:"Region"}]},
+          {id:"progress",title:"Progress",rows:progress,columns:[{key:"name",label:"Name",render:function(row){return cellWithIcon(null,row.name,row.glyph,true);}},{key:"type",label:"Type"},{key:"region",label:"Region",render:function(row){return row.region?lookupLink(row.region):"";}}]},
           {id:"character",title:"Character",rows:character,columns:[{key:"stat",label:"Stat"},countColumn("before","Before"),countColumn("after","After"),changeColumn]},
           {id:"gained",title:"Items gained",rows:gained,columns:[itemColumn,categoryColumn,countColumn("before","Before"),countColumn("after","After"),changeColumn]},
           {id:"upgrades",title:"Upgrades",rows:upgrades,columns:[itemColumn,categoryColumn,{key:"before",label:"Before",numeric:true,sort:function(row){return row.beforeLevel;}},{key:"after",label:"After",numeric:true,sort:function(row){return row.afterLevel;}},changeColumn]},
@@ -892,18 +901,59 @@
       function renderNamedList(id, names, emptyText) {
         var host=byId(id);host.replaceChildren();
         if(!names.length){var empty=document.createElement("span");empty.className="section-note";empty.textContent=emptyText;host.appendChild(empty);return;}
-        names.forEach(function(value){var name=typeof value==="string"?value:value.name,found=typeof value==="string"?true:!!value.found;var entry=document.createElement("span");entry.className="progress-entry "+(found?"is-found":"is-missing");entry.textContent=name;if(typeof value!=="string"){var state=document.createElement("small");state.textContent=(found?(value.foundLabel||"Found in save"):(value.missingLabel||"Missing from save"))+(value.region?" · "+value.region:"");entry.appendChild(state);}host.appendChild(entry);});
+        names.forEach(function(value){var name=typeof value==="string"?value:value.name,found=typeof value==="string"?true:!!value.found;var entry=document.createElement("span");entry.className="progress-entry "+(found?"is-found":"is-missing");if(id==="ash-list")entry.textContent=name;else entry.appendChild(lookupLink(name));if(typeof value!=="string"){var state=document.createElement("small");state.textContent=(found?(value.foundLabel||"Found in save"):(value.missingLabel||"Missing from save"))+(value.region?" · "+value.region:"");entry.appendChild(state);}host.appendChild(entry);});
       }
       var enemyRegionOrder=["Limgrave","Stormhill","Weeping Peninsula","Stormveil Castle","Liurnia of the Lakes","Academy of Raya Lucaria","Bellum Highway","Underground","Caelid","Redmane Castle","Greyoll's Dragonbarrow","Altus Plateau","Mt. Gelmir","Volcano Manor","Capital Outskirts","Leyndell, Royal Capital","Moonlight Altar","Mountaintops of the Giants","Flame Peak","Forbidden Lands","Consecrated Snowfield","Mohgwyn Palace","Miquella's Haligtree","Crumbling Farum Azula","Leyndell, Capital of Ash","Gravesite Plain","Scadu Altus","Scaduview","Shadow Keep","Ancient Ruins of Rauh","Rauh Base","Abyssal Woods","Charo's Hidden Grave","Cerulean Coast","Jagged Peak","Enir-Ilim"];
       var dlcBossRegions=["Abyssal Woods","Ancient Ruins of Rauh","Cerulean Coast","Charo's Hidden Grave","Enir-Ilim","Gravesite Plain","Jagged Peak","Rauh Base","Scadu Altus","Scaduview","Shadow Keep"];
       function isDlcBossRecord(row){return dlcBossRegions.indexOf(String(row.region||""))>=0||/\b(?:DLC|Shadow of the Erdtree)\b/i.test(String(row.name||""));}
       function googleLink(query,label,className){var link=document.createElement("a");link.className=className||"";link.textContent=label;link.href="https://www.google.com/search?q="+encodeURIComponent(query);link.target="_blank";link.rel="noopener noreferrer";link.title="Search Google for "+query;return link;}
+      function lookupLink(label,query){return googleLink("elden ring "+(query||label),label,"lookup-link");}
+      function lookupParts(text,places){
+        var fragment=document.createDocumentFragment();
+        String(text||"").split(" · ").forEach(function(part,index){var trimmed=part.trim();if(index)fragment.appendChild(document.createTextNode(" · "));if(!trimmed)return;fragment.appendChild(!places||places.indexOf(trimmed)>=0?lookupLink(trimmed):document.createTextNode(trimmed));});
+        return fragment;
+      }
+      function characterLink(name){
+        var quest=storylineFor(name);if(!quest)return lookupLink(name);
+        var button=document.createElement("button");button.type="button";button.className="link-button";button.textContent=name;button.title="Open the "+quest.name+" storyline";
+        button.addEventListener("click",function(event){event.preventDefault();event.stopPropagation();openStoryline(quest.name);});return button;
+      }
+      function graceFits(grace,place){if(!grace||!place)return false;var key=normalizedItemName(grace.name);return !!key&&normalizedItemName(place).indexOf(key)>=0;}
+      function samePlace(a,b){var x=normalizedItemName(a),y=normalizedItemName(b);return !!x&&!!y&&(x.indexOf(y)===0||y.indexOf(x)===0);}
+      function questLocations(quest,firstMet){
+        var steps=quest&&quest.steps||[],latest=Number(quest&&quest.latestRecordedStep),reachedStep=null;if(!isFinite(latest))latest=-1;
+        // The NPC waits where the first unfinished step happens; reload/loading steps are transitions, not places.
+        var pending=steps.find(function(step){return step.index>latest&&!/^\s*(?:after a reload|reloading|reload|loading)\b/i.test(step.description||"");})||null,limit=pending?pending.index:latest;
+        steps.forEach(function(step){if(step.location&&step.index<=limit)reachedStep=step;});
+        var firstStep=steps.find(function(step){return step.location;})||null,initial=firstMet||(firstStep&&firstStep.location)||null,currentStep=reachedStep,current=currentStep?currentStep.location:(quest&&quest.location)||initial;
+        var grace=currentStep&&graceFits(currentStep.nearestGrace,current)?currentStep.nearestGrace:quest&&graceFits(quest.nearestGrace,current)?quest.nearestGrace:null;
+        return {initial:initial,current:current,grace:grace,moved:!!current&&!!initial&&!samePlace(current,initial)};
+      }
+      function holdsItem(name){var item=findCatalogItem(name);return !!item&&(item.found||Number(item.quantity||0)>0);}
+      function graceRegionFound(region){return (data.world&&data.world.graceCatalog||[]).some(function(grace){return grace.found&&grace.region===region;});}
+      function greatRunesWon(){return ["Godrick the Grafted","Rennala, Queen of the Full Moon","Starscourge Radahn","Rykard, Lord of Blasphemy","Mohg, Lord of Blood","Malenia, Blade of Miquella"].filter(bossDefeated).length;}
+      function areaOpen(area){
+        var gates=area.open||[];if(!gates.length)return true;
+        return gates.some(function(gate){if(gate.boss)return bossDefeated(gate.boss);if(gate.items)return gate.items.every(holdsItem);if(gate.grace)return graceRegionFound(gate.grace);if(gate.graceName)return (data.world&&data.world.graceCatalog||[]).some(function(grace){return grace.found&&grace.name===gate.graceName;});if(gate.greatRunes)return greatRunesWon()>=gate.greatRunes;return false;});
+      }
+      function placeStatus(place){
+        if(!place)return null;
+        var lower=String(place).toLowerCase(),graces=(data.world&&data.world.graceCatalog||[]).filter(function(grace){return !grace.isDlc;});
+        var area=(storyData.areas||[]).find(function(entry){return entry.match.some(function(word){return lower.indexOf(word)>=0;});})||null;
+        if(area&&!areaOpen(area))return {state:"unavailable",label:"Not available yet",reason:area.need||"Not reachable yet."};
+        var named=graces.filter(function(grace){return graceFits(grace,place);});
+        if(named.length)return named.some(function(grace){return grace.found;})?{state:"open"}:{state:"undiscovered",label:"Not discovered",reason:"Site of Grace not activated yet: "+named[0].name+"."};
+        var aliases=storyData.regionAliases||{},regions=area&&area.regions&&area.regions.length?area.regions:Object.keys(aliases).filter(function(word){return lower.indexOf(word)>=0;}).map(function(word){return aliases[word];});
+        if(!regions.length)return {state:"open"};
+        return regions.some(graceRegionFound)?{state:"open"}:{state:"undiscovered",label:"Not discovered",reason:"No Site of Grace activated in "+regions[0]+" yet."};
+      }
+      function placeBadge(status){var badge=document.createElement("span");badge.className="place-badge is-"+status.state;badge.textContent=status.label;badge.title=status.reason;return badge;}
       function renderEnemyRoute(){
         var host=byId("enemy-route-list"),query=byId("enemy-route-search").value.trim().toLowerCase(),all=data.world&&data.world.bossCatalog||[],rows=all.filter(function(row){return !row.found&&(!byId("exclude-dlc").checked||!isDlcBossRecord(row))&&row.region!=="TEST"&&(!query||[row.name,row.region].join(" ").toLowerCase().includes(query));});
         function regionRank(region){var index=enemyRegionOrder.indexOf(region);return index<0?enemyRegionOrder.length:index;}
         rows.sort(function(a,b){return regionRank(a.region||"")-regionRank(b.region||"")||String(a.region||"Other").localeCompare(String(b.region||"Other"))||String(a.name).localeCompare(String(b.name));});
         text(byId("enemy-route-count"),rows.length+" remaining");host.replaceChildren();var groups=Object.create(null),regionNames=[];rows.forEach(function(row){var region=row.region||"Region not mapped";if(!groups[region]){groups[region]=[];regionNames.push(region);}groups[region].push(row);});
-        regionNames.forEach(function(region,index){var group=document.createElement("details");group.className="enemy-route-group";group.open=!!query||index<3;var summary=document.createElement("summary"),label=document.createElement("span"),count=document.createElement("small");label.textContent=region;count.textContent=groups[region].length+" remaining · route order "+(regionRank(region)+1);summary.appendChild(label);summary.appendChild(count);group.appendChild(summary);var list=document.createElement("div");list.className="enemy-route-entries";groups[region].forEach(function(row){var card=document.createElement("div");card.className="enemy-route-entry";card.appendChild(googleLink("elden ring "+row.name,row.name));card.appendChild(googleLink("elden ring "+row.name+" HP stance negation NG scaling","HP / scaling"));list.appendChild(card);});group.appendChild(list);host.appendChild(group);});
+        regionNames.forEach(function(region,index){var group=document.createElement("details");group.className="enemy-route-group";group.open=!!query||index<3;var summary=document.createElement("summary"),label=document.createElement("span"),count=document.createElement("small");label.textContent=region;count.textContent=groups[region].length+" remaining · route order "+(regionRank(region)+1);summary.appendChild(label);summary.appendChild(count);group.appendChild(summary);var list=document.createElement("div");list.className="enemy-route-entries";groups[region].forEach(function(row){var card=document.createElement("div");card.className="enemy-route-entry";card.appendChild(lookupLink(row.name));card.appendChild(googleLink("elden ring "+row.name+" HP stance negation NG scaling","HP / scaling"));list.appendChild(card);});group.appendChild(list);host.appendChild(group);});
         if(!rows.length){var empty=document.createElement("div");empty.className="empty";empty.textContent=query?"No remaining enemies match this search.":"No unconfirmed named enemies remain in the current DLC filter.";host.appendChild(empty);}
       }
       function renderProgress() {
@@ -913,9 +963,9 @@
         var graceHost=byId("grace-list");graceHost.replaceChildren();
         Object.keys(regions).sort().forEach(function(region){
           var group=document.createElement("div");group.className="region-group";
-          var title=document.createElement("strong");title.textContent=region;group.appendChild(title);
+          var title=document.createElement("strong");if(region==="Other")title.textContent=region;else title.appendChild(lookupLink(region));group.appendChild(title);
           var list=document.createElement("div");list.className="progress-list";
-          regions[region].forEach(function(grace){var entry=document.createElement("span");entry.className="progress-entry "+(grace.found?"is-found":"is-missing");entry.textContent=grace.name;var state=document.createElement("small");state.textContent=grace.found?"Activated":(grace.isDlc?"Not activated · Shadow of the Erdtree":"Not activated");entry.appendChild(state);list.appendChild(entry);});
+          regions[region].forEach(function(grace){var entry=document.createElement("span");entry.className="progress-entry "+(grace.found?"is-found":"is-missing");entry.appendChild(lookupLink(grace.name));var state=document.createElement("small");state.textContent=grace.found?"Activated":(grace.isDlc?"Not activated · Shadow of the Erdtree":"Not activated");entry.appendChild(state);list.appendChild(entry);});
           group.appendChild(list);graceHost.appendChild(group);
         });
         var attributes=data.character&&data.character.attributes||{},attributeHost=byId("attribute-row");attributeHost.replaceChildren();
@@ -985,7 +1035,7 @@
         var previousType=selectedType;typeSelect.querySelectorAll('option:not([value="all"])').forEach(function(option){option.remove();});queryTypes.forEach(function(kind){var option=document.createElement("option");option.value=kind;option.textContent=kind;typeSelect.appendChild(option);});typeSelect.value=queryTypes.indexOf(previousType)>=0?previousType:"all";selectedType=typeSelect.value;
         var rows=dragonEntries.filter(function(entry){var progress=dragonProgress(entry);return (!byId("exclude-dlc").checked||!entry.isDlc)&&(selectedType==="all"||entry.kind===selectedType)&&(statusFilter==="all"||(statusFilter==="slain"&&progress.slain)||(statusFilter==="remaining"&&!progress.slain))&&(!search||[entry.name,entry.kind,entry.region,entry.location,entry.armor,(entry.drops||[]).map(function(drop){return drop.item;}).join(" ")].join(" ").toLowerCase().includes(search));});
          host.replaceChildren();rows.forEach(function(entry){var progress=dragonProgress(entry),card=document.createElement("article");card.className="dragon-card"+(progress.slain?" is-slain":"")+(progress.conflict?" is-conflict":"");var header=document.createElement("div");header.className="dragon-head";var sigil=document.createElement("div");sigil.className="dragon-sigil";sigil.setAttribute("aria-hidden","true");sigil.textContent="🐉";var titleBox=document.createElement("div");titleBox.className="dragon-title";var title=document.createElement("h3");title.appendChild(googleLink("elden ring "+entry.name,entry.name));var kind=document.createElement("small");kind.textContent=(entry.isDlc?"DLC · ":"")+entry.kind+" · "+entry.region;titleBox.appendChild(title);titleBox.appendChild(kind);var badge=document.createElement("span");badge.className="dragon-status";badge.textContent=progress.conflict?"Save/report conflict":progress.slain?"Slain":"Remaining";header.appendChild(sigil);header.appendChild(titleBox);header.appendChild(badge);card.appendChild(header);
-           var location=document.createElement("p");location.className="dragon-location";location.textContent="Location · "+entry.location;card.appendChild(location);var armor=document.createElement("div");armor.className="dragon-armor";var armorLabel=document.createElement("strong");armorLabel.textContent="Armor / defense profile";var armorDetail=document.createElement("span");armorDetail.textContent=entry.armor||"No armor profile recorded.";armor.appendChild(armorLabel);armor.appendChild(armorDetail);card.appendChild(armor);renderDragonCombat(card,entry);
+           var location=document.createElement("p");location.className="dragon-location";location.appendChild(document.createTextNode("Location · "));location.appendChild(lookupParts(entry.location));card.appendChild(location);var armor=document.createElement("div");armor.className="dragon-armor";var armorLabel=document.createElement("strong");armorLabel.textContent="Armor / defense profile";var armorDetail=document.createElement("span");armorDetail.textContent=entry.armor||"No armor profile recorded.";armor.appendChild(armorLabel);armor.appendChild(armorDetail);card.appendChild(armor);renderDragonCombat(card,entry);
            var drops=document.createElement("div");drops.className="dragon-drops";(entry.drops||[]).forEach(function(drop){var item=findCatalogItem(drop.item),owned=!!(item&&(item.found||Number(item.quantity||0)>0)),tile=document.createElement("div");tile.className="dragon-drop"+(owned?" is-owned":"");tile.title=drop.item+" · "+drop.kind;if(item&&item.icon){var image=document.createElement("img");image.src=item.icon;image.alt=drop.item+" icon";image.loading="lazy";image.onerror=function(){image.remove();};tile.appendChild(image);}var dropName=String(drop.item).replace(/^\[(?:Incantation|Sorcery)\]\s*/,""),name=document.createElement("strong");name.appendChild(googleLink("elden ring "+dropName,dropName));var detail=document.createElement("small");detail.textContent=drop.kind+" · "+drop.qty+(item?(owned?" · owned":" · missing"):"");tile.appendChild(name);tile.appendChild(detail);drops.appendChild(tile);});card.appendChild(drops);
           if(progress.conflict){var warning=document.createElement("small");warning.textContent=entry.reportConflict;card.appendChild(warning);}else if(!progress.record){var note=document.createElement("small");note.textContent="No exact boss flag matched in this save export.";card.appendChild(note);}host.appendChild(card);
         });
@@ -1290,29 +1340,30 @@
         return box;
       }
       function storyNodeDone(entry){if(entry.boss)return bossDefeated(entry.boss);if(entry.item){var held=findCatalogItem(entry.item);if(held&&(held.found||Number(held.quantity||0)>0))return true;}if(entry.quest)return !!storyStepRecorded(questRecord(entry.quest),entry.patterns);return null;}
-      function storyNodeCard(entry){var done=storyNodeDone(entry),card=document.createElement("div");card.className="story-option"+(done?" is-taken":"");var label=document.createElement("strong");label.textContent=entry.label+(done?" · done":"");card.appendChild(label);if(entry.note){var note=document.createElement("span");note.textContent=entry.note;card.appendChild(note);}if(entry.rewards&&entry.rewards.length)card.appendChild(rewardRow(entry.rewards));return card;}
+      function storyNodeCard(entry){var done=storyNodeDone(entry),card=document.createElement("div");card.className="story-option"+(done?" is-taken":"");var label=document.createElement("strong");if(entry.boss){label.appendChild(lookupLink(entry.label,entry.boss));if(done)label.appendChild(document.createTextNode(" · done"));}else label.textContent=entry.label+(done?" · done":"");card.appendChild(label);if(entry.note){var note=document.createElement("span");note.textContent=entry.note;card.appendChild(note);}if(entry.rewards&&entry.rewards.length)card.appendChild(rewardRow(entry.rewards));return card;}
       function storyMainCard(){
         var main=storyData.main;if(!main)return null;var card=document.createElement("section");card.className="story-main";var title=document.createElement("h3");title.textContent=main.title;var intro=document.createElement("p");intro.textContent=main.intro;card.appendChild(title);card.appendChild(intro);
         var tree=document.createElement("ol");tree.className="story-tree";
-        main.stages.forEach(function(stage){var states=stage.nodes.map(storyNodeDone).filter(function(state){return state!==null;}),complete=stage.parallel?states.filter(Boolean).length>=2:states.length&&states.every(Boolean);var node=document.createElement("li");node.className="story-stage "+(complete?"is-done":states.some(Boolean)?"is-partial":"is-pending");var heading=document.createElement("h4");heading.textContent=stage.title;node.appendChild(heading);var grid=document.createElement("div");grid.className="story-options";stage.nodes.forEach(function(entry){grid.appendChild(storyNodeCard(entry));});node.appendChild(grid);tree.appendChild(node);});
+        main.stages.forEach(function(stage){var states=stage.nodes.map(storyNodeDone).filter(function(state){return state!==null;}),complete=stage.parallel?states.filter(Boolean).length>=2:states.length&&states.every(Boolean);var node=document.createElement("li");node.className="story-stage "+(complete?"is-done":states.some(Boolean)?"is-partial":"is-pending");var heading=document.createElement("h4");heading.appendChild(lookupParts(stage.title,stage.places||[]));node.appendChild(heading);var grid=document.createElement("div");grid.className="story-options";stage.nodes.forEach(function(entry){grid.appendChild(storyNodeCard(entry));});node.appendChild(grid);tree.appendChild(node);});
         var endings=document.createElement("li");endings.className="story-stage";var endingTitle=document.createElement("h4");endingTitle.textContent="Endings";endings.appendChild(endingTitle);endings.appendChild(storyFork(main.endings,null));tree.appendChild(endings);card.appendChild(tree);
         if(main.optional&&main.optional.length){var optionalTitle=document.createElement("h4");optionalTitle.textContent="Optional Great Runes and dragons";card.appendChild(optionalTitle);var grid=document.createElement("div");grid.className="story-options";main.optional.forEach(function(entry){grid.appendChild(storyNodeCard(entry));});card.appendChild(grid);}
         return card;
       }
       function storyQuestCard(quest,query){
-        var forks=storyData.forks&&storyData.forks[quest.name]||[],steps=quest.steps||[],latest=Number(quest.latestRecordedStep);if(!isFinite(latest))latest=-1;
-        var card=document.createElement("details");card.className="story-card";card.dataset.quest=quest.name;card.open=!!query;
+        var forks=storyData.forks&&storyData.forks[quest.name]||[],steps=quest.steps||[],latest=Number(quest.latestRecordedStep),storyPlace=questLocations(quest);if(!isFinite(latest))latest=-1;
+        var card=document.createElement("details");var placeState=placeStatus(storyPlace.current);card.className="story-card"+(placeState&&placeState.state!=="open"?" is-"+placeState.state:"");card.dataset.quest=quest.name;card.open=!!query;
         var summary=document.createElement("summary"),title=document.createElement("strong"),meta=document.createElement("span"),bar=document.createElement("span"),fill=document.createElement("span");
-        title.textContent=quest.name;meta.className="story-meta";meta.textContent=(quest.npcStatus||"Status not tracked")+" · "+(latest>=0?"flag step "+(latest+1)+" of "+steps.length:"no milestone flag yet")+(forks.length?" · "+plural(forks.length,"key choice"):"");
-        bar.className="story-progress";bar.title=(latest+1)+" of "+steps.length+" tracked steps";fill.style.width=Math.round(100*Math.max(0,latest+1)/Math.max(1,steps.length))+"%";bar.appendChild(fill);summary.appendChild(title);summary.appendChild(meta);summary.appendChild(bar);card.appendChild(summary);
+        title.textContent=quest.name;meta.className="story-meta";meta.textContent=(quest.npcStatus||"Status not tracked")+" · "+(latest>=0?"flag step "+(latest+1)+" of "+steps.length:"no milestone flag yet")+(forks.length?" · "+plural(forks.length,"key choice"):"")+(storyPlace.moved?" · now at "+storyPlace.current:"");
+        bar.className="story-progress";bar.title=(latest+1)+" of "+steps.length+" tracked steps";fill.style.width=Math.round(100*Math.max(0,latest+1)/Math.max(1,steps.length))+"%";bar.appendChild(fill);summary.appendChild(title);if(placeState&&placeState.state!=="open")summary.appendChild(placeBadge(placeState));summary.appendChild(meta);summary.appendChild(bar);card.appendChild(summary);
         var body=document.createElement("div");body.className="story-body";
-        if(quest.nextStep){var next=document.createElement("p");next.className="story-next";next.textContent="Next: "+quest.nextStep.description+(quest.nextStep.location?" · "+quest.nextStep.location:"")+(quest.nextStep.nearestGrace?" · nearest grace: "+quest.nextStep.nearestGrace.label:"");body.appendChild(next);}
+        if(storyPlace.current){var where=document.createElement("p");where.className="story-where";where.title="From save flags: where the questline continues after your latest recorded step.";where.appendChild(document.createTextNode("Current location: "));where.appendChild(lookupLink(storyPlace.current));if(storyPlace.grace){where.appendChild(document.createTextNode(" · nearest grace: "));where.appendChild(lookupLink(storyPlace.grace.label));}if(storyPlace.moved){where.appendChild(document.createTextNode(" · first met at "));where.appendChild(lookupLink(storyPlace.initial));}body.appendChild(where);if(placeState&&placeState.state!=="open"){var gate=document.createElement("p");gate.className="story-gate";gate.appendChild(placeBadge(placeState));gate.appendChild(document.createTextNode(" "+placeState.reason));body.appendChild(gate);}}
+        if(quest.nextStep){var next=document.createElement("p");next.className="story-next";next.textContent="Next step: "+quest.nextStep.description;body.appendChild(next);}
         var rewards=[];steps.forEach(function(step){stepRewards(step.description).forEach(function(name){if(rewards.indexOf(name)<0)rewards.push(name);});});
         if(rewards.length){var label=document.createElement("h4");label.textContent="Rewards on this line";body.appendChild(label);body.appendChild(rewardRow(rewards));}
         forks.forEach(function(fork){body.appendChild(storyFork(fork,quest));});
         var tree=document.createElement("ol");tree.className="story-tree";
         questStages(quest).forEach(function(stage){
-          var last=stage.steps[stage.steps.length-1].index,any=stage.steps.some(function(step){return step.state==="recorded";}),node=document.createElement("li");node.className="story-stage "+(latest>=last?"is-done":any?"is-partial":"is-pending");var heading=document.createElement("h4");heading.textContent=stage.place;node.appendChild(heading);
+          var last=stage.steps[stage.steps.length-1].index,any=stage.steps.some(function(step){return step.state==="recorded";}),node=document.createElement("li");node.className="story-stage "+(latest>=last?"is-done":any?"is-partial":"is-pending");var heading=document.createElement("h4");heading.appendChild(stage.place==="Location not recorded"?document.createTextNode(stage.place):lookupLink(stage.place));node.appendChild(heading);
           var list=document.createElement("ul");stage.steps.forEach(function(step){var choice=/choos|^\s*giv|offer|accept|refus|decid/i.test(step.description||""),line=document.createElement("li");line.className="story-step is-"+(step.state||"not-confirmed")+(choice?" is-choice":"");var mark=document.createElement("span");mark.className="story-mark";mark.textContent=step.state==="recorded"?"✓":step.state==="ambiguous"?"◐":"○";mark.title=step.state==="recorded"?"Recorded in the save":step.state==="ambiguous"?"Flag state is ambiguous":"Not confirmed by save flags";var words=document.createElement("span");words.className="story-words";words.textContent=step.description;line.appendChild(mark);line.appendChild(words);var found=stepRewards(step.description);if(found.length)line.appendChild(rewardRow(found));list.appendChild(line);});
           node.appendChild(list);tree.appendChild(node);
         });
@@ -1328,19 +1379,24 @@
       }
       function storylineFor(name){var parts=[name].concat(String(name||"").split(/[\/,]/));for(var i=0;i<parts.length;i++){var quest=questRecord(parts[i].trim());if(quest)return quest;}return null;}
       function openStoryline(questName){
+        if(!byId("view-reveal").classList.contains("active")){showView("reveal");try{history.replaceState(null,"",window.location.pathname+window.location.search+"#reveal");}catch(_){}}
         var card=Array.from(document.querySelectorAll(".story-card")).find(function(entry){return entry.dataset.quest===questName;});
         if(!card){byId("quest-search").value="";renderReveal();card=Array.from(document.querySelectorAll(".story-card")).find(function(entry){return entry.dataset.quest===questName;});}
         if(!card)return;card.open=true;card.scrollIntoView({behavior:"smooth",block:"start"});var summary=card.querySelector("summary");if(summary)summary.focus({preventScroll:true});
       }
+      function npcPlace(row){
+        var quest=storylineFor(row.name),place=quest?questLocations(quest,row.location):{initial:row.location,current:row.location,moved:false};
+        if(!place.moved)place.grace=row.nearestGrace;return place;
+      }
       function renderNpcStatuses(query){
         var host=byId("npc-status-list");host.replaceChildren();
-        var rows=(data.world&&data.world.npcCatalog||[]).filter(function(row){return (!byId("exclude-dlc").checked||!row.isDlc)&&(!query||[row.name,row.location,row.status].join(" ").toLowerCase().includes(query));});
+        var rows=(data.world&&data.world.npcCatalog||[]).filter(function(row){return (!byId("exclude-dlc").checked||!row.isDlc)&&(!query||[row.name,row.location,row.status].join(" ").toLowerCase().includes(query));}).map(function(row){var status=storylineFor(row.name)?placeStatus(npcPlace(row).current):null;return Object.assign({},row,{placeState:status,rowClass:status&&status.state!=="open"?"is-"+status.state:""});});
         if(!rows.length){var empty=document.createElement("div");empty.className="empty";empty.textContent="No NPC records match this search.";host.appendChild(empty);return;}
         host.appendChild(sortableTable("npc-status",[
-          {key:"name",label:"NPC",render:function(row){var quest=storylineFor(row.name);if(!quest)return row.name;var button=document.createElement("button");button.type="button";button.className="link-button";button.textContent=row.name;button.title="Open the "+quest.name+" storyline";button.addEventListener("click",function(){openStoryline(quest.name);});return button;}},
+          {key:"name",label:"NPC",render:function(row){return characterLink(row.name);}},
           {key:"status",label:"Save flag"},
-          {key:"location",label:"Location",render:function(row){return row.location||"Not recorded";}},
-          {key:"grace",label:"Nearest grace",sort:function(row){return row.nearestGrace?row.nearestGrace.label:"";},render:function(row){return row.nearestGrace?row.nearestGrace.label:"—";}}
+          {key:"location",label:"Location",sort:function(row){return npcPlace(row).current||"";},render:function(row){var place=npcPlace(row),wrap=document.createElement("span");if(!place.current){wrap.textContent="Not recorded";return wrap;}wrap.appendChild(lookupLink(place.current));if(row.placeState&&row.placeState.state!=="open")wrap.appendChild(placeBadge(row.placeState));if(place.moved){var note=document.createElement("small");note.className="place-note";note.appendChild(document.createTextNode("first met at "));note.appendChild(lookupLink(place.initial));wrap.appendChild(note);}return wrap;}},
+          {key:"grace",label:"Nearest grace",sort:function(row){var grace=npcPlace(row).grace;return grace?grace.label:"";},render:function(row){var grace=npcPlace(row).grace;return grace?lookupLink(grace.label):"—";}}
         ],rows,{caption:"NPC status",sortKey:"name"}));
       }
       function renderReveal(){var query=byId("quest-search").value.trim().toLowerCase();renderStorylines(query);renderNpcStatuses(query);}
@@ -1361,28 +1417,28 @@
         input.addEventListener("input",function(){var value=Math.max(0,Math.min(Number(row.remaining||0),Math.floor(Number(input.value||0))));input.value=String(value);plannedPurchases[row.id]=value;updateRuneBasket();});return input;
       }
       function stockColumns(flat){
-        var columns=[];if(flat)columns.push({key:"merchant",label:"Merchant"});
+        var columns=[];if(flat)columns.push({key:"merchant",label:"Merchant",render:function(row){return characterLink(row.merchant);}});
         columns.push(
           {key:"item",label:"Item",render:function(row){var wrap=document.createElement("span");wrap.className="stock-item";var name=document.createElement("strong");name.textContent=row.item;wrap.appendChild(name);if(row.unlimited){var note=document.createElement("small");note.textContent=row.unlockStatus;wrap.appendChild(note);}return wrap;}},
           {key:"price",label:"Price",numeric:true,sort:function(row){return Number(row.price||0);},render:function(row){return Number(row.price||0).toLocaleString();}},
           {key:"purchased",label:"Bought",numeric:true,sort:function(row){return row.unlimited?-1:Number(row.purchased||0);},render:function(row){return row.unlimited?"—":String(row.purchased||0);}},
           {key:"remaining",label:"Left",numeric:true,sort:function(row){return row.unlimited?1e9:Number(row.remaining||0);},render:function(row){return row.unlimited?"∞":row.remaining+" / "+row.quantity;}},
           {key:"status",label:"Status",sort:stockStatus,render:stockStatus});
-        if(flat)columns.push({key:"grace",label:"Nearest grace",sort:function(row){return row.nearestGrace?row.nearestGrace.label:"";},render:function(row){return row.nearestGrace?row.nearestGrace.label:"Not mapped";}});
+        if(flat)columns.push({key:"grace",label:"Nearest grace",sort:function(row){return row.nearestGrace?row.nearestGrace.label:"";},render:function(row){return row.nearestGrace?lookupLink(row.nearestGrace.label):"Not mapped";}});
         columns.push({key:"plan",label:"Plan",sortable:false,render:stockPlanInput});
         return columns;
       }
       function renderTravelMenu(){
         var world=data.world||{},character=data.character||{},stock=allTravelStock(),merchantSelect=byId("travel-merchant-filter"),search=byId("travel-search").value.trim().toLowerCase(),selected=merchantSelect.value||"all",flat=byId("travel-flat").checked;
-        text(byId("last-grace-label"),world.lastRestedGrace&&world.lastRestedGrace.label||"Last rested grace not available in this snapshot");
+        var lastGrace=world.lastRestedGrace&&world.lastRestedGrace.label;byId("last-grace-label").replaceChildren(lastGrace?lookupLink(lastGrace):document.createTextNode("Last rested grace not available in this snapshot"));
         var wallet=Number(character.runes||0);text(byId("rune-wallet"),wallet.toLocaleString()+" runes");
         var merchants=Array.from(new Set(stock.filter(function(row){return !byId("exclude-dlc").checked||!row.isDlc;}).map(function(row){return row.merchant;}))).sort(function(a,b){return a.localeCompare(b);});
         var old=selected;merchantSelect.querySelectorAll('option:not([value="all"])').forEach(function(option){option.remove();});merchants.forEach(function(name){var option=document.createElement("option");option.value=name;option.textContent=name;merchantSelect.appendChild(option);});merchantSelect.value=merchants.indexOf(old)>=0?old:"all";selected=merchantSelect.value;
         var visible=stock.filter(function(row){return (!byId("exclude-dlc").checked||!row.isDlc)&&(selected==="all"||row.merchant===selected)&&(!search||[row.merchant,row.item,row.nearestGrace&&row.nearestGrace.label,row.merchantStatus].join(" ").toLowerCase().includes(search));});
         var groups=Object.create(null);visible.forEach(function(row){(groups[row.merchant]||(groups[row.merchant]=[])).push(row);});var host=byId("merchant-stock");host.replaceChildren();
         if(flat&&visible.length)host.appendChild(sortableTable("travel-all",stockColumns(true),visible,{caption:"Merchant stock",className:"travel-table",sortKey:"merchant"}));
-        else Object.keys(groups).sort().forEach(function(merchant){var rows=groups[merchant],card=document.createElement("details");card.className="merchant-card";card.open=selected!=="all"||!!search;var summary=document.createElement("summary"),name=document.createElement("strong");name.textContent=merchant;var state=document.createElement("span");state.className="merchant-state";state.textContent=rows[0].merchantStatus||"Status not tracked";var remaining=rows.filter(function(row){return !row.unlimited;}).reduce(function(total,row){return total+Number(row.remaining||0);},0),unlimited=rows.filter(function(row){return row.unlimited;}).length;var quantity=document.createElement("span");quantity.className="merchant-total";quantity.textContent=(unlimited?unlimited+" unlimited tiers · ":"")+remaining+" finite items available";summary.appendChild(name);summary.appendChild(state);summary.appendChild(quantity);card.appendChild(summary);
-          var nearest=rows.find(function(row){return row.nearestGrace;});var nearestLine=document.createElement("p");nearestLine.className="footnote";nearestLine.textContent="Nearest Site of Grace: "+(nearest?nearest.nearestGrace.label:"not mapped in shop data")+". Merchant status is save-flag evidence; it does not confirm exact dialogue availability.";card.appendChild(nearestLine);
+        else Object.keys(groups).sort().forEach(function(merchant){var rows=groups[merchant],card=document.createElement("details");card.className="merchant-card";card.open=selected!=="all"||!!search;var summary=document.createElement("summary"),name=document.createElement("strong");name.appendChild(characterLink(merchant));var state=document.createElement("span");state.className="merchant-state";state.textContent=rows[0].merchantStatus||"Status not tracked";var remaining=rows.filter(function(row){return !row.unlimited;}).reduce(function(total,row){return total+Number(row.remaining||0);},0),unlimited=rows.filter(function(row){return row.unlimited;}).length;var quantity=document.createElement("span");quantity.className="merchant-total";quantity.textContent=(unlimited?unlimited+" unlimited tiers · ":"")+remaining+" finite items available";summary.appendChild(name);summary.appendChild(state);summary.appendChild(quantity);card.appendChild(summary);
+          var nearest=rows.find(function(row){return row.nearestGrace;});var nearestLine=document.createElement("p");nearestLine.className="footnote";nearestLine.appendChild(document.createTextNode("Nearest Site of Grace: "));nearestLine.appendChild(nearest?lookupLink(nearest.nearestGrace.label):document.createTextNode("not mapped in shop data"));nearestLine.appendChild(document.createTextNode(". Merchant status is save-flag evidence; it does not confirm exact dialogue availability."));card.appendChild(nearestLine);
           card.appendChild(sortableTable("travel-"+merchant,stockColumns(false),rows,{caption:merchant+" stock"}));host.appendChild(card);
         });
         text(byId("travel-count"),visible.length+" limited-stock rows and unlimited stone tiers · "+merchants.length+" merchants in current filter");updateRuneBasket();
@@ -1403,23 +1459,24 @@
       }
       function safeRenderJourney(){var warning=byId("journey-render-error");warning.hidden=true;try{renderProgress();}catch(error){warning.hidden=false;text(warning,"Journey could not render: "+(error&&error.message||"unknown error")+". Reload the snapshot to try again.");if(window.console&&console.error)console.error("Journey render failed",error);}}
       function render(loadUrlFilters){if(loadUrlFilters)loadFiltersFromUrl();renderHeader();renderCategoryOptions();if(loadUrlFilters)applyUrlSelectFilters();try{renderItems();}catch(error){if(window.console&&console.error)console.error("Inventory render failed",error);}safeRenderJourney();renderDragons();renderActivity();renderAchievements();renderCreatePage();renderTierList();renderReveal();renderTravelMenu();saveActivity();saveBaseline();}
+      function debounced(fn,wait){var timer=null;return function(){clearTimeout(timer);timer=setTimeout(fn,wait);};}
       function filtersChanged(){renderItems();syncFiltersToUrl();}
-      byId("search").addEventListener("input",filtersChanged);byId("category-filter").addEventListener("change",filtersChanged);byId("weapon-type-filter").addEventListener("change",filtersChanged);byId("status-filter").addEventListener("change",filtersChanged);
+      byId("search").addEventListener("input",debounced(filtersChanged,160));byId("category-filter").addEventListener("change",filtersChanged);byId("weapon-type-filter").addEventListener("change",filtersChanged);byId("status-filter").addEventListener("change",filtersChanged);
       byId("exclude-dlc").addEventListener("change",function(){renderHeader();renderCategoryOptions();try{renderItems();}catch(error){if(window.console&&console.error)console.error("Inventory render failed",error);}safeRenderJourney();renderDragons();renderCreatePage();renderTierList();renderReveal();renderTravelMenu();updateRuneBasket();syncFiltersToUrl();});
-      byId("include-dlc-graces").addEventListener("change",safeRenderJourney);byId("enemy-route-search").addEventListener("input",renderEnemyRoute);
+      byId("include-dlc-graces").addEventListener("change",safeRenderJourney);byId("enemy-route-search").addEventListener("input",debounced(renderEnemyRoute,140));
       byId("regenerate-builds").addEventListener("click",renderCreatePage);
       byId("melee-only").addEventListener("change",function(){try{localStorage.setItem("grace-ledger:melee-only",byId("melee-only").checked?"1":"0");}catch(_){}renderCreatePage();renderTierList();});
-      byId("tier-category").addEventListener("change",renderTierList);byId("tier-search").addEventListener("input",renderTierList);
-      byId("dragon-search").addEventListener("input",renderDragons);byId("dragon-type-filter").addEventListener("change",renderDragons);byId("dragon-status-filter").addEventListener("change",renderDragons);
-      byId("quest-search").addEventListener("input",renderReveal);
-      byId("travel-merchant-filter").addEventListener("change",renderTravelMenu);byId("travel-search").addEventListener("input",renderTravelMenu);
+      byId("tier-category").addEventListener("change",renderTierList);byId("tier-search").addEventListener("input",debounced(renderTierList,140));
+      byId("dragon-search").addEventListener("input",debounced(renderDragons,140));byId("dragon-type-filter").addEventListener("change",renderDragons);byId("dragon-status-filter").addEventListener("change",renderDragons);
+      byId("quest-search").addEventListener("input",debounced(renderReveal,140));
+      byId("travel-merchant-filter").addEventListener("change",renderTravelMenu);byId("travel-search").addEventListener("input",debounced(renderTravelMenu,140));
       byId("copy-build-prompt").addEventListener("click",function(){
         var prompt=byId("build-prompt").textContent,success=function(){text(byId("prompt-copy-status"),"Prompt copied.");},failure=function(){text(byId("prompt-copy-status"),"Select and copy the prompt above.");};
         if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(prompt).then(success).catch(failure);
         else{var range=document.createRange();range.selectNodeContents(byId("build-prompt"));var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);failure();}
       });
       byId("activity-session").addEventListener("change",function(){selectedSession=Number(byId("activity-session").value)||0;renderActivity();});
-      byId("activity-filter").addEventListener("input",renderActivity);byId("storylines-expand").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=true;});});byId("storylines-collapse").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=false;});});byId("travel-flat").addEventListener("change",renderTravelMenu);
+      byId("activity-filter").addEventListener("input",debounced(renderActivity,140));byId("storylines-expand").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=true;});});byId("storylines-collapse").addEventListener("click",function(){document.querySelectorAll(".story-card").forEach(function(card){card.open=false;});});byId("travel-flat").addEventListener("change",renderTravelMenu);
       function reloadScript(src,done){var script=document.createElement("script");script.src=src+"?refresh="+Date.now();script.onload=function(){script.remove();done(true);};script.onerror=function(){script.remove();done(false);};document.head.appendChild(script);}
       byId("refresh-button").addEventListener("click",function(){
         // Session history first, then the snapshot, so both describe the same export.

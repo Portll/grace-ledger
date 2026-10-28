@@ -10,6 +10,8 @@ A local, read-only progress tracker for an Elden Ring save. A Python exporter re
 - **Create:** respec suggestions from the weapons you own, with an upgrade-stone budget. A **Melee only** setting, remembered in your browser, keeps the suggestions free of spellcasting.
 - Dragons, a tier list and a manual Steam achievement checklist.
 
+Names of characters, places and Sites of Grace throughout the page are dotted links. NPCs with a questline open their storyline; everything else opens an "elden ring …" web search in a new tab. Where the save shows an NPC has moved on, the NPC table and storyline cards give their current location next to where you first met them. A questline whose next location sits behind a story or item gate you have not passed yet (for example the Forge of the Giants before the Fire Giant) is silvered out and marked "Not available yet" with the requirement. One whose location is reachable but whose Site of Grace you have not activated is marked "Not discovered". The gates are listed in `data/storylines.js` under `areas`.
+
 ## Requirements
 
 - Windows with the Steam version of Elden Ring, and Python 3.13 or newer (ER Save Manager's minimum).
